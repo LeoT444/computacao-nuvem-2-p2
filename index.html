@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Drive para Blob</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    :root {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: #17212b;
+      background: #f4f7fa;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    main { width: min(1050px, calc(100% - 32px)); margin: 48px auto; }
+    header { margin-bottom: 28px; }
+    h1 { margin: 0 0 8px; font-size: clamp(1.7rem, 4vw, 2.25rem); letter-spacing: -.04em; }
+    h2 { margin: 0; font-size: 1.05rem; }
+    p { color: #647282; line-height: 1.5; }
+    .card { padding: 22px; background: white; border: 1px solid #e1e8ef; border-radius: 14px; box-shadow: 0 6px 24px #17212b08; }
+    .folder-controls { display: flex; gap: 12px; align-items: end; margin-bottom: 18px; }
+    label { display: grid; flex: 1; gap: 7px; color: #526170; font-size: .9rem; font-weight: 600; }
+    input[type="text"] { width: 100%; padding: 11px 12px; border: 1px solid #ccd6e0; border-radius: 8px; font: inherit; }
+    button { padding: 10px 14px; border: 1px solid #ccd6e0; border-radius: 8px; background: white; color: #17212b; font: inherit; font-weight: 650; cursor: pointer; }
+    button:hover:not(:disabled) { background: #f2f6fa; }
+    button.primary { color: white; border-color: #1264a3; background: #1264a3; }
+    button.primary:hover:not(:disabled) { background: #0e548c; }
+    button:disabled { cursor: wait; opacity: .55; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 9px; margin: 20px 0 14px; }
+    .layout { display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; }
+    .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .count { color: #647282; font-size: .85rem; }
+    .table-wrap { overflow: auto; margin-top: 14px; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th, td { padding: 11px 9px; border-bottom: 1px solid #edf1f5; font-size: .9rem; }
+    th { color: #647282; font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+    td:first-child, th:first-child { width: 38px; }
+    input[type="checkbox"] { accent-color: #1264a3; }
+    .status { min-height: 22px; margin: 12px 0 0; font-size: .9rem; }
+    .status.error, .result.error { color: #b42318; }
+    .status.success, .result.success { color: #137547; }
+    .result { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+    .empty { color: #8995a2; text-align: center; padding: 24px 8px; }
+    @media (max-width: 700px) {
+      main { margin: 28px auto; }
+      .layout { grid-template-columns: 1fr; }
+      .folder-controls { align-items: stretch; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Google Drive → Azure Blob</h1>
+      <p>Conecte seu Google Drive, escolha a pasta e copie arquivos para o contêiner Azure configurado.</p>
+    </header>
+
+    <section class="card">
+      <div class="folder-controls">
+        <label for="folder-id">ID da pasta do Drive
+          <input id="folder-id" type="text" autocomplete="off" placeholder="Cole o ID da pasta do Google Drive">
+        </label>
+        <button id="connect-google" class="primary" type="button" disabled>Conectar Google Drive</button>
+      </div>
+      <p id="google-status" class="status" role="status" aria-live="polite">Carregando configuração OAuth…</p>
+      <div class="toolbar">
+        <button id="load-drive" type="button">Listar arquivos</button>
+        <button id="load-azure" type="button">Listar blobs</button>
+        <button id="select-all" type="button">Selecionar todos</button>
+        <button id="copy-selected" class="primary" type="button">Copiar selecionados</button>
+      </div>
+      <div class="layout">
+        <section>
+          <div class="panel-heading"><h2>Google Drive</h2><span id="drive-count" class="count">—</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th></th><th>Nome</th><th>Status</th></tr></thead>
+              <tbody id="drive-files"><tr><td class="empty" colspan="3">Clique em “Listar arquivos”.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+        <section>
+          <div class="panel-heading"><h2>Azure Blob</h2><span id="blob-count" class="count">—</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Nome do blob</th></tr></thead>
+              <tbody id="azure-blobs"><tr><td class="empty">Clique em “Listar blobs”.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      <p id="message" class="status" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script>
+    const driveBody = document.querySelector("#drive-files");
+    const blobBody = document.querySelector("#azure-blobs");
+    const message = document.querySelector("#message");
+    const folderInput = document.querySelector("#folder-id");
+    const googleStatus = document.querySelector("#google-status");
+    const buttons = [...document.querySelectorAll("button")];
+    let files = [];
+    let copying = false;
+    let googleTokenClient = null;
+    let googleAccessToken = "";
+    let googleTokenExpiresAt = 0;
+
+    function setMessage(text, kind = "") {
+      message.textContent = text;
+      message.className = `status ${kind}`;
+    }
+
+    async function request(payload) {
+      const needsDrive = payload.action === "list-drive" || payload.action === "copy-file";
+      if (needsDrive) {
+        if (!googleAccessToken || Date.now() >= googleTokenExpiresAt - 30000) {
+          googleAccessToken = "";
+          googleTokenExpiresAt = 0;
+          googleStatus.textContent = "Desconectado. Conecte novamente o Google Drive.";
+          throw new Error("Conecte ou reconecte sua conta do Google Drive.");
+        }
+        payload = {
+          ...payload,
+          folderId: folderInput.value.trim(),
+          googleAccessToken
+        };
+      }
+      const response = await fetch("/api", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        if (data.detail === "Google access expired; reconnect your Google account") {
+          googleAccessToken = "";
+          googleTokenExpiresAt = 0;
+          googleStatus.textContent = "Desconectado. Conecte novamente o Google Drive.";
+        }
+        throw new Error(data.detail || data.error || `Falha HTTP ${response.status}`);
+      }
+      return data;
+    }
+
+    async function initializeGoogleAuth() {
+      try {
+        const response = await fetch("/api/config", { cache: "no-store" });
+        const config = await response.json();
+        if (!response.ok) throw new Error(config.detail || "Falha ao carregar configuração OAuth.");
+        folderInput.value = config.defaultFolderId || "";
+        if (!window.google?.accounts?.oauth2) {
+          throw new Error("Não foi possível carregar a autenticação do Google.");
+        }
+        googleTokenClient = window.google.accounts.oauth2.initTokenClient({
+          client_id: config.googleClientId,
+          scope: "https://www.googleapis.com/auth/drive.readonly",
+          callback: result => {
+            if (result.error) {
+              googleStatus.textContent = `Conexão cancelada ou falhou: ${result.error}`;
+              googleStatus.className = "status error";
+              return;
+            }
+            googleAccessToken = result.access_token;
+            googleTokenExpiresAt = Date.now() + Number(result.expires_in || 3600) * 1000;
+            googleStatus.textContent = "Google Drive conectado nesta sessão.";
+            googleStatus.className = "status success";
+          }
+        });
+        document.querySelector("#connect-google").disabled = false;
+        googleStatus.textContent = "Pronto para conectar sua conta Google.";
+      } catch (error) {
+        googleStatus.textContent = error.message;
+        googleStatus.className = "status error";
+      }
+    }
+
+    document.querySelector("#connect-google").addEventListener("click", () => {
+      if (!googleTokenClient) {
+        setMessage("A autenticação Google ainda não está pronta.", "error");
+        return;
+      }
+      googleStatus.textContent = "Aguardando autorização do Google…";
+      googleStatus.className = "status";
+      googleTokenClient.requestAccessToken({
+        prompt: googleAccessToken ? "" : "consent"
+      });
+    });
+
+    function setBusy(busy) {
+      buttons.forEach(button => button.disabled = busy);
+      copying = busy;
+    }
+
+    function renderFiles() {
+      driveBody.replaceChildren();
+      if (!files.length) {
+        const row = driveBody.insertRow();
+        const cell = row.insertCell();
+        cell.colSpan = 3;
+        cell.className = "empty";
+        cell.textContent = "Nenhum arquivo encontrado.";
+      }
+      for (const file of files) {
+        const row = driveBody.insertRow();
+        const checkboxCell = row.insertCell();
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.dataset.fileId = file.id;
+        checkbox.setAttribute("aria-label", `Selecionar ${file.name}`);
+        checkboxCell.append(checkbox);
+        row.insertCell().textContent = file.name;
+        const statusCell = row.insertCell();
+        statusCell.className = "result";
+        statusCell.dataset.fileId = file.id;
+        statusCell.textContent = "—";
+      }
+      document.querySelector("#drive-count").textContent = `${files.length} arquivo(s)`;
+    }
+
+    document.querySelector("#load-drive").addEventListener("click", async () => {
+      setBusy(true);
+      setMessage("Carregando arquivos do Drive…");
+      try {
+        files = (await request({ action: "list-drive" })).files;
+        renderFiles();
+        setMessage("Lista do Drive atualizada.", "success");
+      } catch (error) {
+        setMessage(error.message, "error");
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    document.querySelector("#load-azure").addEventListener("click", async () => {
+      setBusy(true);
+      setMessage("Carregando blobs do Azure…");
+      try {
+        const blobs = (await request({ action: "list-azure" })).blobs;
+        blobBody.replaceChildren();
+        if (!blobs.length) {
+          const row = blobBody.insertRow();
+          const cell = row.insertCell();
+          cell.className = "empty";
+          cell.textContent = "Nenhum blob encontrado.";
+        }
+        for (const blob of blobs) blobBody.insertRow().insertCell().textContent = blob.name;
+        document.querySelector("#blob-count").textContent = `${blobs.length} blob(s)`;
+        setMessage("Lista do Azure atualizada.", "success");
+      } catch (error) {
+        setMessage(error.message, "error");
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    document.querySelector("#select-all").addEventListener("click", () => {
+      driveBody.querySelectorAll('input[type="checkbox"]').forEach(item => item.checked = true);
+    });
+
+    document.querySelector("#copy-selected").addEventListener("click", async () => {
+      if (copying) return;
+      const selected = [...driveBody.querySelectorAll('input[type="checkbox"]:checked')]
+        .map(checkbox => files.find(file => file.id === checkbox.dataset.fileId))
+        .filter(Boolean);
+      if (!selected.length) {
+        setMessage("Selecione ao menos um arquivo.");
+        return;
+      }
+      setBusy(true);
+      let completed = 0;
+      let failed = 0;
+      try {
+        for (const file of selected) {
+          const statusCell = driveBody.querySelector(
+            `td.result[data-file-id="${CSS.escape(file.id)}"]`
+          );
+          statusCell.textContent = "Copiando…";
+          statusCell.className = "result";
+          try {
+            const { result } = await request({ action: "copy-file", fileId: file.id });
+            statusCell.textContent = result.success ? "Copiado" : `Erro: ${result.error}`;
+            statusCell.className = `result ${result.success ? "success" : "error"}`;
+            if (result.success) completed++;
+            else failed++;
+          } catch (error) {
+            statusCell.textContent = `Erro: ${error.message}`;
+            statusCell.className = "result error";
+            failed++;
+          }
+          setMessage(`Processando ${completed + failed} de ${selected.length}…`);
+        }
+        setMessage(`Concluído: ${completed} sucesso(s), ${failed} erro(s).`, failed ? "error" : "success");
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    window.addEventListener("load", initializeGoogleAuth);
+  </script>
+</body>
+</html>

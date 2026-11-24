@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drive-blob-cli"
+version = "0.1.0"
+description = "List and copy Google Drive files to Azure Blob Storage"
+requires-python = ">=3.11"
+dependencies = [
+  "google-api-python-client>=2.0",
+  "google-auth>=2.0",
+  "azure-storage-blob>=12.0",
+  "python-dotenv>=1.0",
+  "fastapi>=0.117.1",
+]
+
+[project.scripts]
+drive-blob = "drive_blob_cli.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.vercel]
+entrypoint = "app:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,11 @@
+.env
+*.json
+!vercel.json
+credentials/
+.venv/
+venv/
+.vercel/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.vercel

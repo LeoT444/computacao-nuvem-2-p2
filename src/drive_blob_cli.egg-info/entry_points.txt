@@ -1,0 +1,2 @@
+[console_scripts]
+drive-blob = drive_blob_cli.cli:main
